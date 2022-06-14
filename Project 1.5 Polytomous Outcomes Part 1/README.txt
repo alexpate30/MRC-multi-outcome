@@ -14,3 +14,5 @@ p3 processes results of small sample simulation
 
 p4 produces all table sand figures
 
+
+NB:: Currently re-running some of the supplementary large sample analyses for scenario A, as I initially ran them with the incorrect coefficients. Still need to add figures here when done (approx 16/06/2022).
