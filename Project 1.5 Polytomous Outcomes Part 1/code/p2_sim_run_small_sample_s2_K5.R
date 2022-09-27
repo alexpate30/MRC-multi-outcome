@@ -53,7 +53,7 @@ beta0.sim.multinomial <- c(1, 1, 1, 1)*0.1
 
 ## Sequential logistic covariate effects
 coef.sim.seqlog <- coef.sim
-beta0.sim.seqlog <- c(-0.75, -0.5, -0.25, 0)*2.25
+beta0.sim.seqlog <- c(0.75, 0.5, 0.25, 0)*2.25
 
 # ## One vs All covariate effects
 # coef.sim.OvA <- rbind(runif(P.sim, -1, 1), runif(P.sim,-1, 1), runif(P.sim,-1, 1))
@@ -76,7 +76,9 @@ sim.out.list <- vector("list", N.sim)
 set.seed(seed.sim)
 
 ### Run the sim
-for (sim in 1:N.sim){
+for (sim in 1:N.sim){ 
+ 
+  print(paste("sim = ", sim, sep = ""))
   
   ### Create data using each DGM
   ## Development data
@@ -110,7 +112,7 @@ for (sim in 1:N.sim){
   
   ## Run the simulation
   for (i in 1:2){
-    sim.out.list[[sim]][[i]] <- run.sim.small.sample(dat.devel.list[[i]], dat.valid.list[[i]])
+    sim.out.list[[sim]][[i]] <- run.sim.small.sample.K5(dat.devel.list[[i]], dat.valid.list[[i]])
     print(i)
     print(Sys.time())
   }

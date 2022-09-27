@@ -313,7 +313,7 @@ pairwise.couple <- function(probs.in, K){
   # Create array
   probs <- array(probs.in, dim = c(1, K*(K-1)/2))
   
-  # Use code from Github page, referenced in manuscript: https://gist.github.com/cheuerde/7c649749892c8623eee2#file-pairwise_coupling-r
+  # Use code from following Github page, referenced in manuscript: https://gist.github.com/cheuerde/7c649749892c8623eee2#file-pairwise_coupling-r
   Q <- matrix(0,K,K)
   Q[lower.tri(Q)] <- 1 - probs
   Qt <- t(Q)
@@ -681,6 +681,87 @@ fit.model.OvO.PC <- function(dat.devel, dat.valid){
 }
 
 
+###########################################################################################################
+### 2.6) Function to fit sequential logistic model, using every possible ordering of outcome categories ###
+###########################################################################################################
+
+### Fit a sequential logistic regression model to the development dataset, and produce produce predicted risks for a validation dataset
+fit.model.seqlog.all <- function(dat.devel, dat.valid, P){
+  
+#   dat.devel <- dat.devel.list[[1]]
+#   dat.valid <- dat.devel.list[[1]]
+#   P <- 5
+  
+  ### Create a variable with number of outcome categories
+  K <- as.numeric(max(dat.devel$Y))
+  
+  ### Create list of permutations. Note we remove permuatations where the final two categories, 
+  ### as these will result in the same predicted risks, and will reduce half the models we need to fit
+  
+  ## Start by generating all perms
+  perm.list <- permn(c(1:K))
+  
+  ## Now identify which are duplicates with the final two elements swapped
+  dups <- duplicated(lapply(perm.list, function(vec) vec[1:(K-2)]))
+  
+  ## Now subset the perm.list to only contain the non-duplicates
+  perm.list <- perm.list[dups]
+  
+  ### Number of permuatations
+  n.order <- length(perm.list)
+  
+  ### Want to repeat the following process, for every possible order of outcome categories, and store
+  ### predicted risks, to then take an average over
+  
+  ### Create output object to store predicted risks
+  predrisk.list <- vector("list", n.order)
+  
+  ### Cycle through and calculate predicted risk for every permuatation
+  for (order in 1:n.order){
+    
+    ### Assign permuatation
+    perm <- perm.list[[order]]
+    print(paste(order, Sys.time()))
+    print(perm)
+    
+    ### Create an ordinal variable version of the outcome
+    dat.devel$Y.ord <- factor(dat.devel$Y.fac, order = TRUE, 
+                              levels = c(1:K)[perm])
+    
+    ### Fit the sequential logistic regression model
+    fit.seqlog <- vgam(Y.ord ~ ., family = cratio(parallel = F), data = subset(dat.devel, select = -c(Y, Y.fac)))
+    
+    ### Generate risks for individuals in the validation cohort
+    ## Extract the linear predictors, and the predicted risks
+    pred.p <- predict(fit.seqlog, newdata = dat.valid, type = "response")
+    
+    ### Put the predicted risks into a common order
+    if (K == 3){
+      pred.p <- pred.p[,c(which(perm == 1), which(perm == 2), which(perm == 3))]
+    } else if (K == 5){
+      pred.p <- pred.p[,c(which(perm == 1), which(perm == 2), which(perm == 3), which(perm == 4), which(perm == 5))]
+    }
+    
+    #head(pred.p)
+    
+    ### Assign appropriate column names
+    colnames(pred.p) <- paste("p", 1:ncol(pred.p), sep = "")
+    
+    ### Create output validation dataset
+    predrisk.list[[order]] <- pred.p
+    
+  }
+  
+  ### Take average over all permuatations
+  pred.p.mean <- apply(simplify2array(predrisk.list), 1:2, mean)
+  
+  ### Create output validation dataset
+  valid.out <- cbind(dplyr::select(dat.valid, Y, Y.fac), pred.p.mean)
+  
+  ### Return output
+  return(valid.out)
+}
+
 #################################################################################################################
 ### 3.1A) Function to assess overfitting via calibration slope and intercept using each model-specific methods ###
 ### Note these use the linear predictors calculated in the validation cohort, and can therefore only be applied
@@ -727,7 +808,7 @@ calibrate.mod.specific.multinomial <- function(dat.valid.pred){
     
     calib.model.offset <- vgam(dat.valid.pred$Y.fac ~ 1, offset = as.matrix(dat.valid.pred[, c("lp1", "lp2", "lp3")]), 
                                family = multinomial(refLevel = "1"))
-  } else if (K == K){
+  } else if (K == 5){
     
     ## Add constraints
     i <- diag(4)
@@ -1508,6 +1589,8 @@ pdiest<-function(dat.valid.pred){
   } else if (K == 5){
     data <- dplyr::select(dat.valid.pred, c(outcome, p1, p2, p3, p4, p5))
   }
+  ## Reduce to 100,000 observations max for computational reasons
+  data <- data[1:min(nrow(data), 100000), ]
   
   ### ORIGINAL CODE
   y<-data$outcome
@@ -1616,17 +1699,17 @@ calc.Cstat.per.outcome <- function(dat.valid.pred){
 ### 3.7A) Function to run simulation for large sample size ###
 ##############################################################
 
-run.sim.large.sample <- function(dat.devel){
+run.sim.large.sample.OLD <- function(dat.devel){
   
   pred.multinomial <- fit.model.multinomial(dat.devel, dat.devel)
   pred.seqlog <- fit.model.seqlog(dat.devel, dat.devel)
   pred.OvA <- fit.model.OvA(dat.devel, dat.devel)
   pred.OvO.PC <- fit.model.OvO.PC(dat.devel, dat.devel)
   
-  wc.ms.multinomial <- calibrate.mod.specific.multinomial(pred.multinomial)
-  wc.ms.seqlog <- calibrate.mod.specific.seqlog(pred.seqlog)
-  wc.ms.OvA <- calibrate.mod.specific.OvA(pred.OvA)
-  wc.ms.OvO.PC <- calibrate.mod.specific.OvO.PC(pred.OvO.PC)
+#   wc.ms.multinomial <- calibrate.mod.specific.multinomial(pred.multinomial)
+#   wc.ms.seqlog <- calibrate.mod.specific.seqlog(pred.seqlog)
+#   wc.ms.OvA <- calibrate.mod.specific.OvA(pred.OvA)
+#   wc.ms.OvO.PC <- calibrate.mod.specific.OvO.PC(pred.OvO.PC)
   
   wc.po.multinomial <- calibrate.weak.per.outcome(pred.multinomial)
   wc.po.seqlog <- calibrate.weak.per.outcome(pred.seqlog)
@@ -1658,7 +1741,7 @@ run.sim.large.sample <- function(dat.devel){
   calib.flex.po.OvA <- calibrate.model.flexible.per.outcome(pred.OvA)
   calib.flex.po.OvO.PC <- calibrate.model.flexible.per.outcome(pred.OvO.PC)
   
-  return(list("wc.ms.multinomial" = wc.ms.multinomial, "wc.ms.seqlog" = wc.ms.seqlog, "wc.ms.OvA" = wc.ms.OvA, "wc.ms.OvO.PC" = wc.ms.OvO.PC,
+  return(list(#"wc.ms.multinomial" = wc.ms.multinomial, "wc.ms.seqlog" = wc.ms.seqlog, "wc.ms.OvA" = wc.ms.OvA, "wc.ms.OvO.PC" = wc.ms.OvO.PC,
               "wc.po.multinomial" = wc.po.multinomial, "wc.po.seqlog" = wc.po.seqlog, "wc.po.OvA" = wc.po.OvA, "wc.po.OvO.PC" = wc.po.OvO.PC,
               "OvE.multinomial" = OvE.multinomial, "OvE.seqlog" = OvE.seqlog, "OvE.OvA" = OvE.OvA, "OvE.OvO.PC" = OvE.OvO.PC,
               "Cstat.multinomial" = Cstat.multinomial, "Cstat.seqlog" = Cstat.seqlog, "Cstat.OvA" = Cstat.OvA, "Cstat.OvO.PC" = Cstat.OvO.PC,
@@ -1671,13 +1754,92 @@ run.sim.large.sample <- function(dat.devel){
 }
 
 
+#############################################################################################################################
+### 3.7B) Function to run simulation for large sample size, including doing sequential logistic with every possible order ###
+#############################################################################################################################
+
+run.sim.large.sample <- function(dat.devel){
+  
+  print(paste("multinomial", Sys.time()))
+  pred.multinomial <- fit.model.multinomial(dat.devel, dat.devel)
+  print(paste("seqlog", Sys.time()))
+  pred.seqlog <- fit.model.seqlog(dat.devel, dat.devel)
+  print(paste("seqlog.all", Sys.time()))
+  pred.seqlog.all <- fit.model.seqlog.all(dat.devel, dat.devel)
+  print(paste("OvA", Sys.time()))
+  pred.OvA <- fit.model.OvA(dat.devel, dat.devel)
+  print(paste("OvO.PC", Sys.time()))
+  pred.OvO.PC <- fit.model.OvO.PC(dat.devel, dat.devel)
+  
+#   print(paste("wc.ms", Sys.time()))
+#   wc.ms.multinomial <- calibrate.mod.specific.multinomial(pred.multinomial)
+#   wc.ms.seqlog <- calibrate.mod.specific.seqlog(pred.seqlog)
+#   wc.ms.OvA <- calibrate.mod.specific.OvA(pred.OvA)
+#   wc.ms.OvO.PC <- calibrate.mod.specific.OvO.PC(pred.OvO.PC)
+  
+  print(paste("wc.po", Sys.time()))
+  wc.po.multinomial <- calibrate.weak.per.outcome(pred.multinomial)
+  wc.po.seqlog <- calibrate.weak.per.outcome(pred.seqlog)
+  wc.po.seqlog.all <- calibrate.weak.per.outcome(pred.seqlog.all)
+  wc.po.OvA <- calibrate.weak.per.outcome(pred.OvA)
+  wc.po.OvO.PC <- calibrate.weak.per.outcome(pred.OvO.PC)
+  
+  print(paste("OvE", Sys.time()))
+  OvE.multinomial <- calibrate.model.expected.observed(pred.multinomial)
+  OvE.seqlog <- calibrate.model.expected.observed(pred.seqlog)
+  OvE.seqlog.all <- calibrate.model.expected.observed(pred.seqlog.all)
+  OvE.OvA <- calibrate.model.expected.observed(pred.OvA)
+  OvE.OvO.PC <- calibrate.model.expected.observed(pred.OvO.PC)
+  
+  print(paste("Cstat", Sys.time()))
+  Cstat.multinomial <- calc.Cstat.per.outcome(pred.multinomial)
+  Cstat.seqlog <- calc.Cstat.per.outcome(pred.seqlog)
+  Cstat.seqlog.all <- calc.Cstat.per.outcome(pred.seqlog.all)
+  Cstat.OvA <- calc.Cstat.per.outcome(pred.OvA)
+  Cstat.OvO.PC <- calc.Cstat.per.outcome(pred.OvO.PC)
+  
+  print(paste("PDI", Sys.time()))
+  PDI.multinomial <- pdiest(pred.multinomial)
+  PDI.seqlog <- pdiest(pred.seqlog)
+  PDI.seqlog.all <- pdiest(pred.seqlog.all)
+  PDI.OvA <- pdiest(pred.OvA)
+  PDI.OvO.PC <- pdiest(pred.OvO.PC)
+  
+  print(paste("calib.flex.mlr", Sys.time()))
+  calib.flex.mlr.multinomial <- calibrate.model.flexible.polytomous(pred.multinomial)
+  calib.flex.mlr.seqlog <- calibrate.model.flexible.polytomous(pred.seqlog)
+  calib.flex.mlr.seqlog.all <- calibrate.model.flexible.polytomous(pred.seqlog.all)
+  calib.flex.mlr.OvA <- calibrate.model.flexible.polytomous(pred.OvA)
+  calib.flex.mlr.OvO.PC <- calibrate.model.flexible.polytomous(pred.OvO.PC)
+  
+  print(paste("calib.flex.po", Sys.time()))
+  calib.flex.po.multinomial <- calibrate.model.flexible.per.outcome(pred.multinomial)
+  calib.flex.po.seqlog <- calibrate.model.flexible.per.outcome(pred.seqlog)
+  calib.flex.po.seqlog.all <- calibrate.model.flexible.per.outcome(pred.seqlog.all)
+  calib.flex.po.OvA <- calibrate.model.flexible.per.outcome(pred.OvA)
+  calib.flex.po.OvO.PC <- calibrate.model.flexible.per.outcome(pred.OvO.PC)
+  
+  return(list(#"wc.ms.multinomial" = wc.ms.multinomial, "wc.ms.seqlog" = wc.ms.seqlog, "wc.ms.OvA" = wc.ms.OvA, "wc.ms.OvO.PC" = wc.ms.OvO.PC,
+              "wc.po.multinomial" = wc.po.multinomial, "wc.po.seqlog" = wc.po.seqlog, "wc.po.seqlog.all" = wc.po.seqlog.all, "wc.po.OvA" = wc.po.OvA, "wc.po.OvO.PC" = wc.po.OvO.PC,
+              "OvE.multinomial" = OvE.multinomial, "OvE.seqlog" = OvE.seqlog, "OvE.seqlog.all" = OvE.seqlog.all, "OvE.OvA" = OvE.OvA, "OvE.OvO.PC" = OvE.OvO.PC,
+              "Cstat.multinomial" = Cstat.multinomial, "Cstat.seqlog" = Cstat.seqlog, "Cstat.seqlog.all" = Cstat.seqlog.all, "Cstat.OvA" = Cstat.OvA, "Cstat.OvO.PC" = Cstat.OvO.PC,
+              "PDI.multinomial" = PDI.multinomial, "PDI.seqlog" = PDI.seqlog, "PDI.seqlog.all" = PDI.seqlog.all, "PDI.OvA" = PDI.OvA, "PDI.OvO.PC" = PDI.OvO.PC,
+              "calib.flex.mlr.multinomial" = calib.flex.mlr.multinomial, "calib.flex.mlr.seqlog" = calib.flex.mlr.seqlog,
+              "calib.flex.mlr.seqlog.all" = calib.flex.mlr.seqlog.all, 
+              "calib.flex.mlr.OvA" = calib.flex.mlr.OvA, "calib.flex.mlr.OvO.PC" = calib.flex.mlr.OvO.PC,
+              "calib.flex.po.multinomial" = calib.flex.po.multinomial, "calib.flex.po.seqlog" = calib.flex.po.seqlog, 
+              "calib.flex.po.seqlog.all" = calib.flex.po.seqlog.all, 
+              "calib.flex.po.OvA" = calib.flex.po.OvA, "calib.flex.po.OvO.PC" = calib.flex.po.OvO.PC
+  ))
+}
+
+
+
 #########################################################################
-### 3.7A) Function to run simulation for large sample size, for K = 5 ###
+### 3.7C) Function to run simulation for large sample size, for K = 5 ###
 #########################################################################
 
-### When K = 5, we only want to do the flexible calibration plots (not realistic to present 
-### 10 model specific calibration slopes, 5 per outcome slopes, 5 OvE's, etc)
-run.sim.large.sample.K5 <- function(dat.devel){
+run.sim.large.sample.K5.OLD <- function(dat.devel){
   
   pred.multinomial <- fit.model.multinomial(dat.devel, dat.devel)
   pred.seqlog <- fit.model.seqlog(dat.devel, dat.devel)
@@ -1694,10 +1856,10 @@ run.sim.large.sample.K5 <- function(dat.devel){
   wc.po.OvA <- calibrate.weak.per.outcome(pred.OvA)
   wc.po.OvO.PC <- calibrate.weak.per.outcome(pred.OvO.PC)
 #   
-#   OvE.multinomial <- calibrate.model.expected.observed(pred.multinomial)
-#   OvE.seqlog <- calibrate.model.expected.observed(pred.seqlog)
-#   OvE.OvA <- calibrate.model.expected.observed(pred.OvA)
-#   OvE.OvO.PC <- calibrate.model.expected.observed(pred.OvO.PC)
+  OvE.multinomial <- calibrate.model.expected.observed(pred.multinomial)
+  OvE.seqlog <- calibrate.model.expected.observed(pred.seqlog)
+  OvE.OvA <- calibrate.model.expected.observed(pred.OvA)
+  OvE.OvO.PC <- calibrate.model.expected.observed(pred.OvO.PC)
 #   
   Cstat.multinomial <- calc.Cstat.per.outcome(pred.multinomial)
   Cstat.seqlog <- calc.Cstat.per.outcome(pred.seqlog)
@@ -1721,7 +1883,7 @@ run.sim.large.sample.K5 <- function(dat.devel){
   
   return(list(#"wc.ms.multinomial" = wc.ms.multinomial, "wc.ms.seqlog" = wc.ms.seqlog, "wc.ms.OvA" = wc.ms.OvA, "wc.ms.OvO.PC" = wc.ms.OvO.PC,
               "wc.po.multinomial" = wc.po.multinomial, "wc.po.seqlog" = wc.po.seqlog, "wc.po.OvA" = wc.po.OvA, "wc.po.OvO.PC" = wc.po.OvO.PC,
-              #"OvE.multinomial" = OvE.multinomial, "OvE.seqlog" = OvE.seqlog, "OvE.OvA" = OvE.OvA, "OvE.OvO.PC" = OvE.OvO.PC,
+              "OvE.multinomial" = OvE.multinomial, "OvE.seqlog" = OvE.seqlog, "OvE.OvA" = OvE.OvA, "OvE.OvO.PC" = OvE.OvO.PC,
               "Cstat.multinomial" = Cstat.multinomial, "Cstat.seqlog" = Cstat.seqlog, "Cstat.OvA" = Cstat.OvA, "Cstat.OvO.PC" = Cstat.OvO.PC,
               "PDI.multinomial" = PDI.multinomial, "PDI.seqlog" = PDI.seqlog, "PDI.OvA" = PDI.OvA, "PDI.OvO.PC" = PDI.OvO.PC,
               "calib.flex.mlr.multinomial" = calib.flex.mlr.multinomial, "calib.flex.mlr.seqlog" = calib.flex.mlr.seqlog, 
@@ -1731,11 +1893,92 @@ run.sim.large.sample.K5 <- function(dat.devel){
   ))
 }
 
+
+#############################################################################################################################
+### 3.7D) Function to run simulation for large sample size, including doing sequential logistic with every possible order ###
+### For K = 5
+#############################################################################################################################
+
+run.sim.large.sample.K5 <- function(dat.devel){
+  
+  print(paste("multinomial", Sys.time()))
+  pred.multinomial <- fit.model.multinomial(dat.devel, dat.devel)
+  print(paste("seqlog", Sys.time()))
+  pred.seqlog <- fit.model.seqlog(dat.devel, dat.devel)
+  print(paste("seqlog.all", Sys.time()))
+  pred.seqlog.all <- fit.model.seqlog.all(dat.devel, dat.devel)
+  print(paste("OvA", Sys.time()))
+  pred.OvA <- fit.model.OvA(dat.devel, dat.devel)
+  print(paste("OvO.PC", Sys.time()))
+  pred.OvO.PC <- fit.model.OvO.PC(dat.devel, dat.devel)
+  
+#   print(paste("wc.ms", Sys.time()))
+#   wc.ms.multinomial <- calibrate.mod.specific.multinomial(pred.multinomial)
+#   wc.ms.seqlog <- calibrate.mod.specific.seqlog(pred.seqlog)
+#   wc.ms.OvA <- calibrate.mod.specific.OvA(pred.OvA)
+#   wc.ms.OvO.PC <- calibrate.mod.specific.OvO.PC(pred.OvO.PC)
+  
+  print(paste("wc.po", Sys.time()))
+  wc.po.multinomial <- calibrate.weak.per.outcome(pred.multinomial)
+  wc.po.seqlog <- calibrate.weak.per.outcome(pred.seqlog)
+  wc.po.seqlog.all <- calibrate.weak.per.outcome(pred.seqlog.all)
+  wc.po.OvA <- calibrate.weak.per.outcome(pred.OvA)
+  wc.po.OvO.PC <- calibrate.weak.per.outcome(pred.OvO.PC)
+  
+  print(paste("OvE", Sys.time()))
+  OvE.multinomial <- calibrate.model.expected.observed(pred.multinomial)
+  OvE.seqlog <- calibrate.model.expected.observed(pred.seqlog)
+  OvE.seqlog.all <- calibrate.model.expected.observed(pred.seqlog.all)
+  OvE.OvA <- calibrate.model.expected.observed(pred.OvA)
+  OvE.OvO.PC <- calibrate.model.expected.observed(pred.OvO.PC)
+  
+  print(paste("Cstat", Sys.time()))
+  Cstat.multinomial <- calc.Cstat.per.outcome(pred.multinomial)
+  Cstat.seqlog <- calc.Cstat.per.outcome(pred.seqlog)
+  Cstat.seqlog.all <- calc.Cstat.per.outcome(pred.seqlog.all)
+  Cstat.OvA <- calc.Cstat.per.outcome(pred.OvA)
+  Cstat.OvO.PC <- calc.Cstat.per.outcome(pred.OvO.PC)
+  
+  print(paste("PDI", Sys.time()))
+  PDI.multinomial <- pdiest(pred.multinomial)
+  PDI.seqlog <- pdiest(pred.seqlog)
+  PDI.seqlog.all <- pdiest(pred.seqlog.all)
+  PDI.OvA <- pdiest(pred.OvA)
+  PDI.OvO.PC <- pdiest(pred.OvO.PC)
+  
+  print(paste("calib.flex.mlr", Sys.time()))
+  calib.flex.mlr.multinomial <- calibrate.model.flexible.polytomous(pred.multinomial)
+  calib.flex.mlr.seqlog <- calibrate.model.flexible.polytomous(pred.seqlog)
+  calib.flex.mlr.seqlog.all <- calibrate.model.flexible.polytomous(pred.seqlog.all)
+  calib.flex.mlr.OvA <- calibrate.model.flexible.polytomous(pred.OvA)
+  calib.flex.mlr.OvO.PC <- calibrate.model.flexible.polytomous(pred.OvO.PC)
+  
+  print(paste("calib.flex.po", Sys.time()))
+  calib.flex.po.multinomial <- calibrate.model.flexible.per.outcome(pred.multinomial)
+  calib.flex.po.seqlog <- calibrate.model.flexible.per.outcome(pred.seqlog)
+  calib.flex.po.seqlog.all <- calibrate.model.flexible.per.outcome(pred.seqlog.all)
+  calib.flex.po.OvA <- calibrate.model.flexible.per.outcome(pred.OvA)
+  calib.flex.po.OvO.PC <- calibrate.model.flexible.per.outcome(pred.OvO.PC)
+  
+  return(list("wc.ms.multinomial" = wc.ms.multinomial, "wc.ms.seqlog" = wc.ms.seqlog, "wc.ms.OvA" = wc.ms.OvA, "wc.ms.OvO.PC" = wc.ms.OvO.PC,
+              "wc.po.multinomial" = wc.po.multinomial, "wc.po.seqlog" = wc.po.seqlog, "wc.po.seqlog.all" = wc.po.seqlog.all, "wc.po.OvA" = wc.po.OvA, "wc.po.OvO.PC" = wc.po.OvO.PC,
+              "OvE.multinomial" = OvE.multinomial, "OvE.seqlog" = OvE.seqlog, "OvE.seqlog.all" = OvE.seqlog.all, "OvE.OvA" = OvE.OvA, "OvE.OvO.PC" = OvE.OvO.PC,
+              "Cstat.multinomial" = Cstat.multinomial, "Cstat.seqlog" = Cstat.seqlog, "Cstat.seqlog.all" = Cstat.seqlog.all, "Cstat.OvA" = Cstat.OvA, "Cstat.OvO.PC" = Cstat.OvO.PC,
+              "PDI.multinomial" = PDI.multinomial, "PDI.seqlog" = PDI.seqlog, "PDI.seqlog.all" = PDI.seqlog.all, "PDI.OvA" = PDI.OvA, "PDI.OvO.PC" = PDI.OvO.PC,
+              "calib.flex.mlr.multinomial" = calib.flex.mlr.multinomial, "calib.flex.mlr.seqlog" = calib.flex.mlr.seqlog,
+              "calib.flex.mlr.seqlog.all" = calib.flex.mlr.seqlog.all, 
+              "calib.flex.mlr.OvA" = calib.flex.mlr.OvA, "calib.flex.mlr.OvO.PC" = calib.flex.mlr.OvO.PC,
+              "calib.flex.po.multinomial" = calib.flex.po.multinomial, "calib.flex.po.seqlog" = calib.flex.po.seqlog, 
+              "calib.flex.po.seqlog.all" = calib.flex.po.seqlog.all, 
+              "calib.flex.po.OvA" = calib.flex.po.OvA, "calib.flex.po.OvO.PC" = calib.flex.po.OvO.PC
+  ))
+}
+
 #############################################################
-### 3.8) Function to run simulation for small sample size ###
+### 3.8A) Function to run simulation for small sample size ###
 #############################################################
 
-run.sim.small.sample <- function(dat.devel, dat.valid){
+run.sim.small.sample.OLD <- function(dat.devel, dat.valid){
   
   pred.multinomial <- fit.model.multinomial(dat.devel, dat.valid)
   pred.seqlog <- fit.model.seqlog(dat.devel, dat.valid)
@@ -1766,14 +2009,159 @@ run.sim.small.sample <- function(dat.devel, dat.valid){
   PDI.seqlog <- pdiest(pred.seqlog)
   PDI.OvA <- pdiest(pred.OvA)
   PDI.OvO.PC <- pdiest(pred.OvO.PC)
+  
+  ECI.multinomial <- calibrate.model.flexible.polytomous(pred.multinomial)$ECI
+  ECI.seqlog <- calibrate.model.flexible.polytomous(pred.seqlog)$ECI
+  ECI.OvA <- calibrate.model.flexible.polytomous(pred.OvA)$ECI
+  ECI.OvO.PC <- calibrate.model.flexible.polytomous(pred.OvO.PC)$ECI
     
   return(list("wc.ms.multinomial" = wc.ms.multinomial, "wc.ms.seqlog" = wc.ms.seqlog, "wc.ms.OvA" = wc.ms.OvA, "wc.ms.OvO.PC" = wc.ms.OvO.PC,
               "wc.po.multinomial" = wc.po.multinomial, "wc.po.seqlog" = wc.po.seqlog, "wc.po.OvA" = wc.po.OvA, "wc.po.OvO.PC" = wc.po.OvO.PC,
               "OvE.multinomial" = OvE.multinomial, "OvE.seqlog" = OvE.seqlog, "OvE.OvA" = OvE.OvA, "OvE.OvO.PC" = OvE.OvO.PC,
               "Cstat.multinomial" = Cstat.multinomial, "Cstat.seqlog" = Cstat.seqlog, "Cstat.OvA" = Cstat.OvA, "Cstat.OvO.PC" = Cstat.OvO.PC,
-              "PDI.multinomial" = PDI.multinomial, "PDI.seqlog" = PDI.seqlog, "PDI.OvA" = PDI.OvA, "PDI.OvO.PC" = PDI.OvO.PC
+              "PDI.multinomial" = PDI.multinomial, "PDI.seqlog" = PDI.seqlog, "PDI.OvA" = PDI.OvA, "PDI.OvO.PC" = PDI.OvO.PC,
+              "ECI.multinomial" = ECI.multinomial, "ECI.seqlog" = ECI.seqlog, "ECI.OvA" = ECI.OvA, "ECI.OvO.PC" = ECI.OvO.PC
   ))
 }
+
+
+#############################################################
+### 3.8B) Function to run simulation for small sample size ###
+### Includes seqlog.all
+#############################################################
+
+run.sim.small.sample <- function(dat.devel, dat.valid){
+  
+  print(paste("multinomial", Sys.time()))
+  pred.multinomial <- fit.model.multinomial(dat.devel, dat.valid)
+  print(paste("seqlog", Sys.time()))
+  pred.seqlog <- fit.model.seqlog(dat.devel, dat.valid)
+  print(paste("seqlog.all", Sys.time()))
+  pred.seqlog.all <- fit.model.seqlog.all(dat.devel, dat.valid)
+  print(paste("OvA", Sys.time()))
+  pred.OvA <- fit.model.OvA(dat.devel, dat.valid)
+  print(paste("OvO.PC", Sys.time()))
+  pred.OvO.PC <- fit.model.OvO.PC(dat.devel, dat.valid)
+  
+  print(paste("wc.ms", Sys.time()))
+  wc.ms.multinomial <- calibrate.mod.specific.multinomial(pred.multinomial)
+  wc.ms.seqlog <- calibrate.mod.specific.seqlog(pred.seqlog)
+  wc.ms.OvA <- calibrate.mod.specific.OvA(pred.OvA)
+  wc.ms.OvO.PC <- calibrate.mod.specific.OvO.PC(pred.OvO.PC)
+  
+  print(paste("wc.po", Sys.time()))
+  wc.po.multinomial <- calibrate.weak.per.outcome(pred.multinomial)
+  wc.po.seqlog <- calibrate.weak.per.outcome(pred.seqlog)
+  wc.po.seqlog.all <- calibrate.weak.per.outcome(pred.seqlog.all)
+  wc.po.OvA <- calibrate.weak.per.outcome(pred.OvA)
+  wc.po.OvO.PC <- calibrate.weak.per.outcome(pred.OvO.PC)
+  
+  print(paste("OvE", Sys.time()))
+  OvE.multinomial <- calibrate.model.expected.observed(pred.multinomial)
+  OvE.seqlog <- calibrate.model.expected.observed(pred.seqlog)
+  OvE.seqlog.all <- calibrate.model.expected.observed(pred.seqlog.all)
+  OvE.OvA <- calibrate.model.expected.observed(pred.OvA)
+  OvE.OvO.PC <- calibrate.model.expected.observed(pred.OvO.PC)
+  
+  print(paste("Cstat", Sys.time()))
+  Cstat.multinomial <- calc.Cstat.per.outcome(pred.multinomial)
+  Cstat.seqlog <- calc.Cstat.per.outcome(pred.seqlog)
+  Cstat.seqlog.all <- calc.Cstat.per.outcome(pred.seqlog.all)
+  Cstat.OvA <- calc.Cstat.per.outcome(pred.OvA)
+  Cstat.OvO.PC <- calc.Cstat.per.outcome(pred.OvO.PC)
+  
+  print(paste("PDI", Sys.time()))
+  PDI.multinomial <- pdiest(pred.multinomial)
+  PDI.seqlog <- pdiest(pred.seqlog)
+  PDI.seqlog.all <- pdiest(pred.seqlog.all)
+  PDI.OvA <- pdiest(pred.OvA)
+  PDI.OvO.PC <- pdiest(pred.OvO.PC)
+  
+  print(paste("ECI", Sys.time()))
+  ECI.multinomial <- calibrate.model.flexible.polytomous(pred.multinomial)$ECI
+  ECI.seqlog <- calibrate.model.flexible.polytomous(pred.seqlog)$ECI
+  ECI.seqlog.all <- calibrate.model.flexible.polytomous(pred.seqlog.all)$ECI
+  ECI.OvA <- calibrate.model.flexible.polytomous(pred.OvA)$ECI
+  ECI.OvO.PC <- calibrate.model.flexible.polytomous(pred.OvO.PC)$ECI
+  
+  return(list("wc.ms.multinomial" = wc.ms.multinomial, "wc.ms.seqlog" = wc.ms.seqlog, "wc.ms.OvA" = wc.ms.OvA, "wc.ms.OvO.PC" = wc.ms.OvO.PC,
+              "wc.po.multinomial" = wc.po.multinomial, "wc.po.seqlog" = wc.po.seqlog, "wc.po.seqlog.all" = wc.po.seqlog.all, "wc.po.OvA" = wc.po.OvA, "wc.po.OvO.PC" = wc.po.OvO.PC,
+              "OvE.multinomial" = OvE.multinomial, "OvE.seqlog" = OvE.seqlog, "OvE.seqlog.all" = OvE.seqlog.all, "OvE.OvA" = OvE.OvA, "OvE.OvO.PC" = OvE.OvO.PC,
+              "Cstat.multinomial" = Cstat.multinomial, "Cstat.seqlog" = Cstat.seqlog, "Cstat.seqlog.all" = Cstat.seqlog.all, "Cstat.OvA" = Cstat.OvA, "Cstat.OvO.PC" = Cstat.OvO.PC,
+              "PDI.multinomial" = PDI.multinomial, "PDI.seqlog" = PDI.seqlog, "PDI.seqlog.all" = PDI.seqlog.all, "PDI.OvA" = PDI.OvA, "PDI.OvO.PC" = PDI.OvO.PC,
+              "ECI.multinomial" = ECI.multinomial, "ECI.seqlog" = ECI.seqlog, "ECI.seqlog.all" = ECI.seqlog.all, "ECI.OvA" = ECI.OvA, "ECI.OvO.PC" = ECI.OvO.PC
+  ))
+}
+
+
+#############################################################
+### 3.8B) Function to run simulation for small sample size for K = 5 ###
+### We don't calculate ECI, its too computationally intensive
+#############################################################
+
+run.sim.small.sample.K5 <- function(dat.devel, dat.valid){
+  
+  print(paste("multinomial", Sys.time()))
+  pred.multinomial <- fit.model.multinomial(dat.devel, dat.valid)
+  print(paste("seqlog", Sys.time()))
+  pred.seqlog <- fit.model.seqlog(dat.devel, dat.valid)
+  print(paste("seqlog.all", Sys.time()))
+  pred.seqlog.all <- fit.model.seqlog.all(dat.devel, dat.valid)
+  print(paste("OvA", Sys.time()))
+  pred.OvA <- fit.model.OvA(dat.devel, dat.valid)
+  print(paste("OvO.PC", Sys.time()))
+  pred.OvO.PC <- fit.model.OvO.PC(dat.devel, dat.valid)
+  
+  print(paste("wc.ms", Sys.time()))
+  wc.ms.multinomial <- calibrate.mod.specific.multinomial(pred.multinomial)
+  wc.ms.seqlog <- calibrate.mod.specific.seqlog(pred.seqlog)
+  wc.ms.OvA <- calibrate.mod.specific.OvA(pred.OvA)
+  wc.ms.OvO.PC <- calibrate.mod.specific.OvO.PC(pred.OvO.PC)
+  
+  print(paste("wc.po", Sys.time()))
+  wc.po.multinomial <- calibrate.weak.per.outcome(pred.multinomial)
+  wc.po.seqlog <- calibrate.weak.per.outcome(pred.seqlog)
+  wc.po.seqlog.all <- calibrate.weak.per.outcome(pred.seqlog.all)
+  wc.po.OvA <- calibrate.weak.per.outcome(pred.OvA)
+  wc.po.OvO.PC <- calibrate.weak.per.outcome(pred.OvO.PC)
+  
+  print(paste("OvE", Sys.time()))
+  OvE.multinomial <- calibrate.model.expected.observed(pred.multinomial)
+  OvE.seqlog <- calibrate.model.expected.observed(pred.seqlog)
+  OvE.seqlog.all <- calibrate.model.expected.observed(pred.seqlog.all)
+  OvE.OvA <- calibrate.model.expected.observed(pred.OvA)
+  OvE.OvO.PC <- calibrate.model.expected.observed(pred.OvO.PC)
+  
+  print(paste("Cstat", Sys.time()))
+  Cstat.multinomial <- calc.Cstat.per.outcome(pred.multinomial)
+  Cstat.seqlog <- calc.Cstat.per.outcome(pred.seqlog)
+  Cstat.seqlog.all <- calc.Cstat.per.outcome(pred.seqlog.all)
+  Cstat.OvA <- calc.Cstat.per.outcome(pred.OvA)
+  Cstat.OvO.PC <- calc.Cstat.per.outcome(pred.OvO.PC)
+  
+  print(paste("PDI", Sys.time()))
+  PDI.multinomial <- pdiest(pred.multinomial)
+  PDI.seqlog <- pdiest(pred.seqlog)
+  PDI.seqlog.all <- pdiest(pred.seqlog.all)
+  PDI.OvA <- pdiest(pred.OvA)
+  PDI.OvO.PC <- pdiest(pred.OvO.PC)
+  
+#   print(paste("ECI", Sys.time()))
+#   ECI.multinomial <- calibrate.model.flexible.polytomous(pred.multinomial)$ECI
+#   ECI.seqlog <- calibrate.model.flexible.polytomous(pred.seqlog)$ECI
+#   ECI.seqlog.all <- calibrate.model.flexible.polytomous(pred.seqlog.all)$ECI
+#   ECI.OvA <- calibrate.model.flexible.polytomous(pred.OvA)$ECI
+#   ECI.OvO.PC <- calibrate.model.flexible.polytomous(pred.OvO.PC)$ECI
+  
+  return(list("wc.ms.multinomial" = wc.ms.multinomial, "wc.ms.seqlog" = wc.ms.seqlog, "wc.ms.OvA" = wc.ms.OvA, "wc.ms.OvO.PC" = wc.ms.OvO.PC,
+              "wc.po.multinomial" = wc.po.multinomial, "wc.po.seqlog" = wc.po.seqlog, "wc.po.seqlog.all" = wc.po.seqlog.all, "wc.po.OvA" = wc.po.OvA, "wc.po.OvO.PC" = wc.po.OvO.PC,
+              "OvE.multinomial" = OvE.multinomial, "OvE.seqlog" = OvE.seqlog, "OvE.seqlog.all" = OvE.seqlog.all, "OvE.OvA" = OvE.OvA, "OvE.OvO.PC" = OvE.OvO.PC,
+              "Cstat.multinomial" = Cstat.multinomial, "Cstat.seqlog" = Cstat.seqlog, "Cstat.seqlog.all" = Cstat.seqlog.all, "Cstat.OvA" = Cstat.OvA, "Cstat.OvO.PC" = Cstat.OvO.PC,
+              "PDI.multinomial" = PDI.multinomial, "PDI.seqlog" = PDI.seqlog, "PDI.seqlog.all" = PDI.seqlog.all, "PDI.OvA" = PDI.OvA, "PDI.OvO.PC" = PDI.OvO.PC
+              #"ECI.multinomial" = ECI.multinomial, "ECI.seqlog" = ECI.seqlog, "ECI.seqlog.all" = ECI.seqlog.all, "ECI.OvA" = ECI.OvA, "ECI.OvO.PC" = ECI.OvO.PC
+  ))
+}
+
 
 
 
